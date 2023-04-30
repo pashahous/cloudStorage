@@ -6,8 +6,7 @@ import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.*;
 import java.net.Socket;
-
-
+import java.util.logging.*;
 
 
 /**
@@ -16,15 +15,19 @@ import java.net.Socket;
  */
 
 public class Client extends JFrame {
+    private static final Logger logger = Logger.getLogger(Client.class.getName());
     private final Socket socket;
     private final DataOutputStream out;
     private final DataInputStream in;
+    private final String defoultPathToData;
 
     public Client() throws IOException {
         // init
+        initLogger();
         socket = new Socket("localhost", 6789);
         out = new DataOutputStream(socket.getOutputStream());
         in = new DataInputStream(socket.getInputStream());
+        this.defoultPathToData = "client/";
 
         // create form
         setSize(300, 300);
@@ -35,14 +38,17 @@ public class Client extends JFrame {
 
         btnSend.addActionListener(a -> {
             String[] cmd = textField.getText().split(" ");
+            logger.log(Level.FINE, "FINE");
             if ("upload".equals(cmd[0])) {
                 sendFile(cmd[1]);
             } else if ("download".equals(cmd[0])) {
-                getFile(cmd[1]);
+                try {
+                    getFile(cmd[1]);
+                } catch (IOException e) {
+                    System.out.println("Error download");
+                }
             }
-
         });
-
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
@@ -53,35 +59,80 @@ public class Client extends JFrame {
 
         panel.add(textField);
         panel.add(btnSend);
-
         add(panel);
 
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setVisible(true);
     }
 
-    private void getFile(String filename) {
-        // TODO: 13.05.2021 downloading
+    private void initLogger() {
+        Handler concoleHandler = new ConsoleHandler();
+        concoleHandler.setFormatter(new Formatter() {
+            @Override
+            public String format(LogRecord record) {
+                return record.getLoggerName() +" "+ record.getMessage() + "\n";
+            }
+        });
+        logger.addHandler(concoleHandler);
+        logger.setLevel(Level.ALL);
+
+        logger.setUseParentHandlers(false);
+    }
+
+    private void getFile(String filename) throws IOException {
+        // получаем файл из сервера
+        try {
+            out.writeUTF("download");
+            logger.fine("send download");
+            out.writeUTF(filename);//from out 1
+            logger.fine("send " + filename);
+            if (in.readUTF().equalsIgnoreCase("error")) {
+                logger.fine("reciev ERROR message - file note found in server");
+                System.out.println("File not found in server");
+                return;
+            }
+
+            File file = new File(defoultPathToData + filename);
+
+            if (!file.exists()) {
+                file.createNewFile();
+            }
+            long size = in.readLong(); // from out 2 получаем длинну файла
+            byte[] buffer = new byte[8 * 1024];
+
+            FileOutputStream fos = new FileOutputStream(file);
+            for (int i = 0; i < (size + (8 * 1024 - 1)) / buffer.length; i++) {
+                int read = in.read(buffer);
+                fos.write(buffer, 0, read);
+            }
+            fos.close();
+            out.writeUTF("ok");
+            System.out.println("download " + filename + " is ok");
+
+
+        } catch (IOException e) {
+            out.writeUTF("wrong");
+        }
     }
 
     private void sendFile(String filename) {
         try {
-            File file = new File("client/" + filename);
+            File file = new File(defoultPathToData + filename);
             if (!file.exists()) {
                 throw new FileNotFoundException();
             }
-
             long fileLength = file.length();
-            FileInputStream fis = new FileInputStream(file);
+            try (FileInputStream fis = new FileInputStream(file)) {
 
-            out.writeUTF("upload");
-            out.writeUTF(filename);
-            out.writeLong(fileLength);
+                out.writeUTF("upload");
+                out.writeUTF(filename);
+                out.writeLong(fileLength);
 
-            int read = 0;
-            byte[] buffer = new byte[8 * 1024];
-            while ((read = fis.read(buffer)) != -1) {
-                out.write(buffer, 0, read);
+                int read;
+                byte[] buffer = new byte[8 * 1024];
+                while (( read = fis.read(buffer)) != -1) {
+                    out.write(buffer, 0, read);
+                }
             }
 
             out.flush();
@@ -89,7 +140,7 @@ public class Client extends JFrame {
             String status = in.readUTF();
             System.out.println("Sending status: " + status);
         } catch (FileNotFoundException e) {
-            System.err.println("File not found - /client/" + filename);
+            System.out.println("File not found -" + "client/ " + filename);
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -109,8 +160,7 @@ public class Client extends JFrame {
             System.out.println(command);
         } catch (EOFException eofException) {
             System.err.println("Reading command error from " + socket.getInetAddress());
-        }
-        catch (IOException e) {
+        } catch (IOException e) {
             e.printStackTrace();
         }
     }
